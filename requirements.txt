@@ -1,0 +1,28 @@
+# Milestone 1
+pydantic==2.14.3
+PyYAML==6.0.3
+python-dotenv==1.2.4
+tzdata==2026.6        # IANA timezone data; Windows has none built in
+pytest==9.2.0
+
+# Milestone 2
+feedparser==6.0.14
+httpx==0.28.1
+trafilatura==2.3.1    # main-text extraction from article pages
+
+# Clips (Twitch)
+streamlink==8.6.3     # pulls the live HLS stream
+websockets==17.4      # EventSub chat
+
+# YouTube upload (Milestone 7)
+google-api-python-client==2.202.0
+google-auth==2.62.2
+google-auth-oauthlib==1.5.0
+google-auth-httplib2==0.4.4
+
+# Voice timing fallback and scheduler
+faster-whisper==1.2.1
+APScheduler==3.11.3
+
+# FFmpeg: project-local copy in tools/ffmpeg (gyan.dev essentials build), or on PATH.
+# LLM calls use the Claude Code CLI (`claude`), installed separately and logged in.

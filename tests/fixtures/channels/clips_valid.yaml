@@ -1,0 +1,38 @@
+id: testclips
+name: "Test clips"
+language: en
+format: clip
+timezone: "Asia/Kolkata"
+daily_budget_usd: 1
+streamers:
+  - platform: twitch
+    login: test_streamer
+    display_name: TestStreamer
+    permission:
+      evidence: https://example.com/permission-dm
+      granted_on: 2026-11-01
+detection:
+  window_seconds: 5
+  baseline_minutes: 1
+  warmup_minutes: 0
+  spike_ratio: 3.0
+  min_messages_per_second: 2.0
+  cooldown_seconds: 30
+clip:
+  pre_seconds: 8
+  post_seconds: 4
+  buffer_minutes: 2
+  max_clips_per_day: 5
+video:
+  width: 360
+  height: 640
+  fps: 30
+  max_seconds: 59
+models:
+  metadata: claude-haiku-5-5
+gates:
+  final_auto_approve: false
+publish:
+  privacy: private
+  category_id: 20
+  made_for_kids: false

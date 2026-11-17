@@ -1,0 +1,11 @@
+.env
+.venv/
+data/
+tools/
+__pycache__/
+*.pyc
+.pytest_cache/
+# OAuth secrets and tokens, in case one is ever dropped in here by mistake
+client_secret*.json
+token*.json
+*.token

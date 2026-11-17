@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+  <title>Site B</title>
+  <link>https://site-b.example/</link>
+  <description>Fixture feed that repeats one of site A's links</description>
+  <item>
+    <title>Syndicated: GTA 6 pre-load date confirmed</title>
+    <link>https://SITE-A.example/news/gta-6-preload/#comments</link>
+    <description>Same article as site A, different URL spelling.</description>
+    <pubDate>{RECENT}</pubDate>
+  </item>
+</channel>
+</rss>

@@ -1,0 +1,60 @@
+# Copy to channels/<id>.yaml once you have at least one streamer's permission.
+# Only streamers listed here are ever watched, and each must have permission evidence.
+id: gta6clips
+name: "TBD"
+language: en
+format: clip
+timezone: "Asia/Kolkata"
+daily_budget_usd: 2          # for LLM titles later; clipping itself is free
+
+streamers:
+  - platform: twitch
+    login: example_streamer          # lower-case Twitch login (the part after twitch.tv/)
+    display_name: ExampleStreamer
+    # credit: "twitch.tv/example_streamer"   # text burned into the clip (this is the default)
+    permission:
+      # A link (DM, panel, Discord post) or a file in the project, e.g. a screenshot:
+      evidence: assets/permissions/example_streamer.png
+      granted_on: 2026-11-17
+      conditions: "Credit in title and description; link to channel."
+
+detection:
+  window_seconds: 8          # short window the chat rate is measured over
+  baseline_minutes: 5        # what "normal" chat looks like for this streamer
+  warmup_minutes: 3          # no clips until the baseline has data
+  spike_ratio: 3.0           # spike = 3x normal chat speed ...
+  min_messages_per_second: 1.5   # ... and at least this fast
+  cooldown_seconds: 120      # gap between clips from one streamer
+  hype_weight: 1.5           # "LUL", emote spam, caps count 1.5x
+  min_zscore: 3.0            # ... and well outside this streamer's normal ups and downs
+  min_unique_chatters: 5     # at least this many different people in the burst
+  max_messages_per_chatter: 2   # one spammer counts at most twice per window
+  min_score: 40              # 0-100 judgement (breadth, reactions, emote walls, "clip it")
+  ignore_users: []           # extra bots; Nightbot, StreamElements etc. are built in
+
+clip:
+  pre_seconds: 25            # video before chat reacted (the moment itself)
+  post_seconds: 10           # and after
+  buffer_minutes: 5          # rolling recording kept on disk per live streamer
+  max_clips_per_day: 10
+  layout: blur_pad           # blur_pad: full frame on blurred background; center_crop: crop the middle
+  quality: "1080p60,1080p,720p60,720p,best"
+
+video:
+  width: 1080
+  height: 1920
+  fps: 30
+  max_seconds: 59
+
+llm:
+  provider: claude_cli
+models:
+  metadata: claude-haiku-5-5   # writes the clip title from stream title + chat reaction
+
+gates:
+  final_auto_approve: false  # true = upload as soon as a clip is cut, no approval step
+
+publish:
+  privacy: private
+  category_id: 20
+  made_for_kids: false

@@ -1,0 +1,47 @@
+# Valid YAML, invalid channel: several mistakes the validator must catch.
+id: gta6
+name: "TBD"
+topic_brief: "x"
+language: en
+format: short
+shorts_per_day: 3
+publish_times_local: ["09:00", "25:00"]   # bad time, and only 2 entries
+timezone: "Asia/Kolkatta"                  # typo
+daily_budget_usd: 5
+
+sources:
+  rss: []
+  keywords: ["GTA 6"]
+
+models:
+  script: claude-sonnet-5-5
+  scoring: claude-haiku-5-5
+  metadata: claude-haiku-5-5
+
+voice:
+  provider: TBD
+  voice_id: TBD
+  speed: 1.05
+
+visuals:
+  provider: TBD
+  style_prompt: "x"
+  images_per_short: 6
+  use_official_folder: "yes"               # string, not a boolean
+
+video:
+  width: 1080
+  height: 1920
+  fps: 30
+  max_seconds: 55
+  caption_style: word_highlight
+
+gates:
+  ideas_auto_approve: false
+  script_auto_approve: false
+  final_auto_aprove: false                 # misspelled key
+
+publish:
+  privacy: private
+  category_id: 20
+  made_for_kids: false

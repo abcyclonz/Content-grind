@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+  <title>Site A Games</title>
+  <link>https://site-a.example/</link>
+  <description>Fixture feed</description>
+  <item>
+    <title>GTA 6 pre-load date confirmed by Rockstar</title>
+    <link>https://site-a.example/news/gta-6-preload?utm_source=rss</link>
+    <description>&lt;p&gt;Rockstar has confirmed when the pre-load opens.&lt;/p&gt;</description>
+    <pubDate>{RECENT}</pubDate>
+  </item>
+  <item>
+    <title>Vice City map size compared</title>
+    <link>https://site-a.example/news/vice-city-map</link>
+    <description>A look at the map.</description>
+    <pubDate>{RECENT}</pubDate>
+  </item>
+  <item>
+    <title>Old GTA VI trailer recap</title>
+    <link>https://site-a.example/news/old-trailer</link>
+    <description>From last month.</description>
+    <pubDate>{OLD}</pubDate>
+  </item>
+  <item>
+    <title>Best racing games of the year</title>
+    <link>https://site-a.example/news/racing</link>
+    <description>No match here, not even GTA 60.</description>
+    <pubDate>{RECENT}</pubDate>
+  </item>
+  <item>
+    <title>Undated GTA6 story</title>
+    <link>https://site-a.example/news/undated</link>
+    <description>No date, so it is skipped.</description>
+  </item>
+</channel>
+</rss>

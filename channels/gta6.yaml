@@ -1,0 +1,94 @@
+id: gta6
+name: "GooseGetaway"   # YouTube: https://www.youtube.com/channel/UCL0H54RT5t7uss-L5g07crA
+topic_brief: >
+  News about Grand Theft Auto VI (GTA VI, GTA 6) by Rockstar Games, set in the
+  fictional state of Leonida, including Vice City. Its release date is
+  19 November 2026, which is after the model's training data, so anything
+  the model remembers about the game may be wrong or out of date. Rely only
+  on the supplied source text.
+language: en
+format: short
+shorts_per_day: 3
+publish_times_local: ["09:00", "14:00", "19:00"]
+timezone: "Asia/Kolkata"
+daily_budget_usd: 5
+
+sources:
+  # Verified 2026-11-13: each returned HTTP 200, a valid feed, and at least one
+  # GTA-related item in the previous 48 hours. Leak/rumour-heavy outlets
+  # (Dexerto, Insider Gaming) are kept; scripts must attribute claims to them.
+  rss:
+    - https://www.videogameschronicle.com/feed/
+    - https://feeds.feedburner.com/ign/games-all
+    - https://www.ign.com/rss/articles/feed
+    - https://www.gamespot.com/feeds/game-news/
+    - https://www.pcgamer.com/rss/
+    - https://www.gamesradar.com/feeds.xml
+    - https://www.eurogamer.net/feed
+    - https://kotaku.com/feed
+    - https://www.pushsquare.com/feeds/latest
+    - https://www.purexbox.com/feeds/latest
+    - https://www.dexerto.com/feed/
+    - https://www.gamesindustry.biz/feed
+    - https://gamerant.com/feed/
+    - https://insider-gaming.com/feed/
+  # Case-insensitive, matched on whole words; spacing between words is flexible.
+  keywords: ["GTA 6", "GTA6", "GTA VI", "Grand Theft Auto 6", "Grand Theft Auto VI",
+             "Rockstar Games", "Vice City", "Leonida"]
+  max_age_hours: 48
+
+llm:
+  provider: claude_cli   # headless Claude Code CLI, uses your Claude login
+
+models:
+  script: claude-sonnet-5-5
+  scoring: claude-haiku-5-5
+  metadata: claude-haiku-5-5
+
+script:
+  min_words: 110     # spoken words across all lines
+  max_words: 140
+
+voice:
+  provider: elevenlabs              # elevenlabs | google_chirp3
+  voice_id: TX3LPaxmHKxFdv7VOQHJ    # Liam: energetic, social-media style (tts-voices lists others)
+  model: eleven_flash_v2_5          # cheapest (0.5-1 credit/char); eleven_v3 / eleven_v4 sound best (1/char)
+  speed: 1.05
+  # Google alternative (needs GOOGLE_TTS_CREDENTIALS_FILE):
+  #   provider: google_chirp3, voice_id: en-US-Chirp3-HD-Charon
+
+outro:                              # channel signature at the end of every Short
+  sound: assets/gta6/brand/goose_honk.wav   # original synthesized double honk (python -m network.brand)
+  text: "GOOSE GETAWAY"
+  seconds: 1.2                      # skipped automatically if it would push a Short past max_seconds
+
+captions:
+  whisper_model: small              # faster-whisper model used to time each word
+  device: cpu                       # CPU int8 takes ~2 s per Short here. "auto" tries the GPU first,
+                                    # but that needs NVIDIA's CUDA 12 cuBLAS/cuDNN libraries installed.
+
+visuals:
+  provider: procedural   # procedural = local animated neon backgrounds (free); cloudflare_flux next
+  style_prompt: >
+    Stylized neon-lit Florida coastal city, cinematic, vertical 9:16.
+    Original imagery only. No logos, no game UI, no named characters.
+  images_per_short: 6
+  use_official_folder: true
+
+video:
+  width: 1080
+  height: 1920
+  fps: 30
+  max_seconds: 55
+  caption_style: word_highlight
+
+gates:                # false = wait for Telegram approval
+  ideas_auto_approve: false
+  script_auto_approve: false
+  final_auto_approve: false
+
+publish:
+  privacy: private    # switch to public or scheduled when ready
+  use_publish_times: false   # TRIAL: uploads stay private. true = auto-public at 09:00/14:00/19:00
+  category_id: 20     # Gaming; verified against the API in Milestone 7
+  made_for_kids: false
