@@ -89,6 +89,27 @@ def align(words: list[str], heard: list[WordTiming], duration: float) -> Alignme
     return Alignment(out, matched)
 
 
+def decode_audio_16k(path: Path):
+    """16 kHz mono float32 samples via FFmpeg.
+
+    faster-whisper's own file decoder (PyAV) breaks across PyAV versions
+    ("open() got an unexpected keyword argument 'metadata_errors'"), so the
+    audio is decoded here and passed to it as an array.
+    """
+    import subprocess
+
+    import numpy as np
+
+    from network import media
+    proc = subprocess.run([media.ffmpeg(), "-hide_banner", "-loglevel", "error", "-i", str(path),
+                           "-vn", "-ac", "1", "-ar", "16000", "-f", "f32le", "-"],
+                          capture_output=True, timeout=600)
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg could not decode {Path(path).name}: "
+                           f"{proc.stderr.decode(errors='replace')[-300:]}")
+    return np.frombuffer(proc.stdout, dtype=np.float32)
+
+
 class WhisperTranscriber:
     """faster-whisper with word timestamps; GPU float16 if it works, else CPU int8."""
 
@@ -105,7 +126,7 @@ class WhisperTranscriber:
 
     def _run(self, audio: Path, prompt: str) -> list[WordTiming]:
         segments, _ = self._model.transcribe(
-            str(audio), language=self.language, word_timestamps=True,
+            decode_audio_16k(audio), language=self.language, word_timestamps=True,
             initial_prompt=prompt[:800], vad_filter=False, beam_size=5,
         )
         return [WordTiming(w.word.strip(), w.start, w.end) for seg in segments for w in (seg.words or [])]

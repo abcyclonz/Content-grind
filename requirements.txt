@@ -13,6 +13,8 @@ trafilatura==2.3.1    # main-text extraction from article pages
 # Clips (Twitch)
 streamlink==8.6.3     # pulls the live HLS stream
 websockets==17.4      # EventSub chat
+pillow==13.0.0        # caption box image for `clips caption`
+yt-dlp>=2026.1.1      # past YouTube streams: chat replay + video (clips youtube); pin after first install
 
 # YouTube upload (Milestone 7)
 google-api-python-client==2.202.0

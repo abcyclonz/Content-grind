@@ -47,6 +47,7 @@ class Scene:
     path: Path | None = None    # image or video file
     palette: int = 0
     offset: float = 0.0         # where to start reading a video file, seconds
+    fit: str = "pad"            # video only: "pad" (full frame over a blurred copy) or "crop" (fill 9:16)
 
     @property
     def duration(self) -> float:
@@ -166,6 +167,12 @@ def sources_credit(urls: list[str]) -> str:
 
 def _scene_args(scene: Scene, length: float, video: Video, index: int) -> list[str]:
     W, H, fps = video.width, video.height, video.fps
+    if scene.source == "video" and scene.path and scene.fit == "crop":
+        # Fill the 9:16 frame with the middle of the picture.
+        return ["-ss", f"{scene.offset:.3f}", "-i", str(scene.path),
+                "-filter_complex",
+                f"[0:v]setpts=PTS-STARTPTS,fps={fps},scale=-2:{H},crop={W}:{H},setsar=1[v]",
+                "-map", "[v]"]
     if scene.source == "video" and scene.path:
         # Full frame in the middle over a blurred, zoomed copy (quarter-size blur is much faster).
         # Live captures often have timestamps that do not start at 0 (and may jump), so
