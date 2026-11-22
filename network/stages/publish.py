@@ -1,7 +1,8 @@
 """Stage 7.10: upload final_approved jobs to YouTube.
 
-- Clips go up straight away; Shorts get the next free publish slot from the
-  channel config and are uploaded private with status.publishAt.
+- Shorts, and clip channels that set publish_times_local, get the next free
+  publish slot from the channel config and are uploaded private with
+  status.publishAt. Other clips go up straight away.
 - Quota: videos.insert has its own bucket of 100 calls/day (resets midnight
   Pacific). Calls are counted in the costs table and the stage stops cleanly
   before the limit.
@@ -37,6 +38,7 @@ class PublishReport:
     channel_id: str
     uploaded: list[tuple[int, str, str | None]] = field(default_factory=list)  # job, video id, publish_at
     would_upload: list[tuple[int, str]] = field(default_factory=list)
+    would_schedule: dict[int, str] = field(default_factory=dict)  # DRY_RUN: job -> planned publishAt
     promoted: list[int] = field(default_factory=list)
     failed: list[tuple[int, str]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -52,7 +54,8 @@ class PublishReport:
             lines.append(f"  job {job} uploaded: https://youtu.be/{vid}"
                          + (f" (scheduled {at})" if at else ""))
         for job, title in self.would_upload:
-            lines.append(f"  job {job} would upload (DRY_RUN): {title}")
+            at = self.would_schedule.get(job)
+            lines.append(f"  job {job} would upload (DRY_RUN): {title}" + (f" (scheduled {at})" if at else ""))
         if self.promoted:
             lines.append(f"  scheduled -> published: {self.promoted}")
         lines += [f"  job {j} failed: {e}" for j, e in self.failed]
@@ -74,12 +77,20 @@ def uploads_today(conn: sqlite3.Connection, now: datetime) -> int:
     ).fetchone()[0]
 
 
-def next_publish_slot(conn: sqlite3.Connection, channel: ChannelConfig, now: datetime) -> datetime:
+SLOT_SEARCH_DAYS = 120
+
+
+def uses_slots(channel: AnyChannel) -> bool:
+    return bool(channel.publish.use_publish_times and channel.publish_times_local)
+
+
+def next_publish_slot(conn: sqlite3.Connection, channel: AnyChannel, now: datetime,
+                      also_taken: set[str] | frozenset[str] = frozenset()) -> datetime:
     taken = {r[0] for r in conn.execute(
         "SELECT scheduled_publish_at FROM jobs WHERE channel_id = ? AND scheduled_publish_at IS NOT NULL",
-        (channel.id,))}
+        (channel.id,))} | set(also_taken)
     local_now = now.astimezone(channel.tz)
-    for day in range(0, 30):
+    for day in range(0, SLOT_SEARCH_DAYS):
         d = (local_now + timedelta(days=day)).date()
         for hhmm in sorted(channel.publish_times_local):
             h, m = map(int, hhmm.split(":"))
@@ -87,7 +98,7 @@ def next_publish_slot(conn: sqlite3.Connection, channel: ChannelConfig, now: dat
             iso = slot.astimezone(timezone.utc).isoformat(timespec="seconds")
             if slot >= now + MIN_LEAD and iso not in taken:
                 return slot
-    raise RuntimeError("no free publish slot in the next 30 days")
+    raise RuntimeError(f"no free publish slot in the next {SLOT_SEARCH_DAYS} days")
 
 
 def synthetic_flag(channel: AnyChannel) -> bool:
@@ -153,6 +164,7 @@ def run(
     report = PublishReport(channel.id)
     now = now or datetime.now(timezone.utc)
     _promote_due(conn, channel, now, report)
+    planned: set[str] = set()  # DRY_RUN: slots handed out in this run
 
     for job in db.jobs_in_state(conn, "final_approved", channel.id):
         video = db.get_artifact(conn, job["id"], "video")
@@ -167,6 +179,11 @@ def run(
 
         if settings.dry_run:
             report.would_upload.append((job["id"], meta["title"]))
+            if schedule and uses_slots(channel):
+                slot = next_publish_slot(conn, channel, now, planned)
+                iso = slot.astimezone(timezone.utc).isoformat(timespec="seconds")
+                planned.add(iso)
+                report.would_schedule[job["id"]] = slot.astimezone(channel.tz).strftime("%a %d %b %H:%M %Z")
             continue
         if uploads_today(conn, now) >= UPLOADS_PER_DAY:
             report.note = f"stopped: {UPLOADS_PER_DAY} uploads today already (resets midnight Pacific)"
@@ -174,9 +191,7 @@ def run(
 
         try:
             client = client or YouTubeClient(_credentials(channel))
-            publish_at = (next_publish_slot(conn, channel, now)
-                          if schedule and channel.publish.use_publish_times
-                          and isinstance(channel, ChannelConfig) else None)
+            publish_at = next_publish_slot(conn, channel, now) if schedule and uses_slots(channel) else None
             body = build_body(channel, meta, job["id"], publish_at)
             marker = job_dir(settings, job["id"]) / "upload.json"
 

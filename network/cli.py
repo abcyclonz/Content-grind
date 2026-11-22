@@ -478,6 +478,244 @@ def cmd_clips_simulate(args) -> int:
     return 0
 
 
+def cmd_clips_youtube(args) -> int:
+    """Clip a past YouTube live stream from its chat replay."""
+    from network.clips import youtube_vod
+    from network.clips.detector import SpikeDetector
+    from network.clips.simulate import load_chat, replay, simulate
+    _setup_logging()
+    settings = load_settings()
+    channel = _clip_channel(settings, args.channel)
+    streamer = next((s for s in channel.streamers if s.login == args.streamer), None)
+    if streamer is None:
+        print(f"{args.streamer!r} is not a permitted streamer of channel {channel.id}", file=sys.stderr)
+        return 1
+    workdir = settings.data_dir / "youtube_vods" / youtube_vod.video_id(args.url)
+    try:
+        chat = youtube_vod.fetch_chat(args.url, workdir)
+        spikes = replay(load_chat(chat), SpikeDetector(channel.detection, ignore_users=(args.streamer,)))
+        for s in spikes:
+            m, sec = divmod(int(s.start), 60)
+            print(f"{m:02d}:{sec:02d}  {s.explain()}")
+        kept = sum(s.accepted for s in spikes)
+        print(f"{len(spikes)} spike(s), {kept} would be clipped (min_score {channel.detection.min_score:g})")
+        if args.score_only or not kept:
+            return 0
+        video = youtube_vod.fetch_video(args.url, workdir)
+    except youtube_vod.YouTubeVodError as e:
+        print(e, file=sys.stderr)
+        return 1
+    conn = db.connect(settings.db_path)
+    try:
+        jobs = simulate(conn, settings, channel, args.streamer, video, chat)
+    finally:
+        conn.close()
+    print(f"created clip jobs: {jobs or 'none'}")
+    return 0
+
+
+def cmd_clips_find(args) -> int:
+    """LOCAL TEST: find high moments in a past YouTube stream's chat and cut the raw clips."""
+    import json as _json
+    from network.clips import youtube_vod as yv
+    from network.clips.simulate import load_chat
+    from network.config import ClipSettings, Detection
+    _setup_logging()
+    settings = load_settings()
+    try:
+        start, end = yv.parse_time(args.start), yv.parse_time(args.end)
+    except ValueError as e:
+        print(e, file=sys.stderr)
+        return 1
+    if end <= start:
+        print("--end must be after --start", file=sys.stderr)
+        return 1
+    detection = Detection(min_score=args.min_score) if args.min_score is not None else Detection()
+    clip = ClipSettings()
+    vid = yv.video_id(args.url)
+    workdir = settings.data_dir / "youtube_vods" / vid
+    outdir = settings.data_dir / "test_clips" / vid
+    # Feed the detector a few minutes before the window so it knows "normal" chat by the start.
+    lead = 60.0 * (detection.baseline_minutes + 1)
+    print(f"LOCAL TEST: chat of {vid} from {yv.fmt_time(start)} to {yv.fmt_time(end)} "
+          f"(nothing here is uploaded)")
+    try:
+        chat_path = yv.fetch_chat(args.url, workdir, max(0.0, start - lead), end)
+    except yv.YouTubeVodError as e:
+        print(e, file=sys.stderr)
+        return 1
+    chat = load_chat(chat_path)
+    mode = args.mode
+    if mode == "auto":
+        mode = "reaction" if yv.chat_is_capped(chat, start, end) else "speed"
+    if mode == "speed":
+        spikes = yv.find_moments(chat, detection, start, end)
+    else:
+        spikes = yv.find_reaction_moments(chat, start, end, min_score=detection.min_score)
+    in_window = sum(1 for r in chat if start <= r["t"] <= end)
+    why = " (chat speed is capped on this stream, so moments are found by what people type)" \
+        if args.mode == "auto" and mode == "reaction" else ""
+    print(f"{in_window} chat messages in the window; mode: {mode}{why}; {len(spikes)} moment(s)\n")
+    moments = [yv.Moment(s, max(0.0, s.start - clip.pre_seconds), s.start + clip.post_seconds)
+               for s in spikes]
+    kept = sorted((m for m in moments if m.spike.accepted), key=lambda m: -m.spike.score)
+    for m in moments:
+        mark = "CLIP" if m in kept[:args.max_clips] else ("skip" if m.spike.accepted else " -- ")
+        print(f"  {mark}  {yv.fmt_time(m.spike.start)}  {m.spike.explain()}")
+        if m.spike.samples:
+            print("              chat: " + " | ".join(t[:30] for t in m.spike.samples[:5]))
+    chosen = kept[:args.max_clips]
+    if not args.score_only:
+        for m in chosen:
+            name = f"clip_{yv.fmt_time(m.spike.start).replace(':', '-')}_score{int(m.spike.score)}.mp4"
+            try:
+                m.path = yv.download_section(args.url, m.t0, m.t1, outdir / name)
+                print(f"  saved {m.path}")
+            except (yv.YouTubeVodError, media_error()) as e:
+                print(f"  could not cut {yv.fmt_time(m.spike.start)}: {e}", file=sys.stderr)
+    outdir.mkdir(parents=True, exist_ok=True)
+    report = outdir / f"moments_{int(start)}-{int(end)}.json"
+    report.write_text(_json.dumps({"url": args.url, "window": [yv.fmt_time(start), yv.fmt_time(end)],
+                                   "local_test_only": True, "chat_messages": in_window,
+                                   "moments": [m.as_dict() for m in moments]},
+                                  indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"\n{len(chosen)} clip(s) chosen (best first, max {args.max_clips}); report: {report}")
+    return 0
+
+
+def media_error():
+    from network.media import MediaError
+    return MediaError
+
+
+def cmd_clips_edit(args) -> int:
+    """Turn a raw clip into our vertical Short: crop, remove streamer audio, add our voice + captions."""
+    from network.clips import editor
+    _setup_logging()
+    settings = load_settings()
+    if bool(args.script) == bool(args.text):
+        print("give the narration with exactly one of --script FILE or --text \"...\"", file=sys.stderr)
+        return 1
+    script = Path(args.script).read_text(encoding="utf-8") if args.script else args.text.replace("|", "\n")
+    out = args.out or args.clip.with_name(args.clip.stem + "_edited.mp4")
+    try:
+        res = editor.edit_clip(args.clip, script, out, settings, voice_file=args.voice_file,
+                               fit=args.fit, hook=args.hook or "", credit=args.credit or "",
+                               start=args.start)
+    except (editor.EditError, media_error()) as e:
+        print(e, file=sys.stderr)
+        return 1
+    if settings.dry_run and not args.voice_file:
+        print("DRY_RUN=1: the narration is a placeholder tone. Set TTS_API_KEY and DRY_RUN=0 in .env "
+              "for the real AI voice, or pass --voice-file with your own recording.")
+    for w in res.warnings:
+        print(f"warning: {w}")
+    print(f"saved {res.out} ({res.duration:.1f}s, voice: {res.voice_source}, captions: {res.timing_source})")
+    return 0
+
+
+def cmd_clips_caption(args) -> int:
+    """Caption-box Short: white box with our text over the clip, original audio kept."""
+    from network.clips import overlay
+    settings = load_settings()
+    out = args.out or args.clip.with_name(args.clip.stem + "_caption.mp4")
+    try:
+        face = overlay.parse_facecam(args.facecam) if args.facecam else None
+        info = overlay.render_caption_clip(args.clip, args.text.replace("|", "\n"), out,
+                                           settings.data_dir / "caption_work" / out.stem,
+                                           fit=args.fit, credit=args.credit or "", mute=args.mute,
+                                           start=args.start or 0.0, duration=args.duration,
+                                           facecam=face)
+    except (overlay.OverlayError, media_error()) as e:
+        print(e, file=sys.stderr)
+        return 1
+    print(f"saved {out} ({info['duration']:.1f}s, {info['width']}x{info['height']}, "
+          f"audio: {'removed' if args.mute else 'original'})")
+    return 0
+
+
+def cmd_clips_import(args) -> int:
+    """Queue finished `clips stream` Shorts as upload jobs for a clip channel, best first."""
+    from network.clips import importer
+    settings = load_settings()
+    channel = _clip_channel(settings, args.channel)
+    streamer = next((s for s in channel.streamers if s.login == args.streamer), None)
+    if streamer is None:
+        print(f"{args.streamer!r} is not a permitted streamer of channel {channel.id}", file=sys.stderr)
+        return 1
+    if not args.folder.is_dir():
+        print(f"folder not found: {args.folder}", file=sys.stderr)
+        return 1
+    conn = db.connect(settings.db_path)
+    try:
+        rep = importer.import_folder(conn, settings, channel, streamer, args.folder,
+                                     min_score=args.min_score, limit=args.limit, approve=args.approve,
+                                     preview=args.preview, include_check_by_eye=args.include_check_by_eye,
+                                     hashtags=args.hashtags, shuffle=args.shuffle,
+                                     varied=args.varied)
+    finally:
+        conn.close()
+    rows = rep.picked if args.preview else [c for _, c in rep.imported]
+    ids = {id(c): j for j, c in rep.imported}
+    head = "would import" if args.preview else ("imported (approved)" if args.approve else "imported (waiting for approval)")
+    print(f"{head}: {len(rows)} clip(s) for '{channel.id}', {'varied order' if args.varied else 'random order' if args.shuffle else 'best first'}")
+    for n, c in enumerate(rows, 1):
+        job = f"job {ids[id(c)]:>4}  " if id(c) in ids else ""
+        print(f"  {n:>3}. {job}score {c.score:5.1f}  {c.hour}/{c.video.name}  {c.title}")
+    if rep.already:
+        print(f"skipped {len(rep.already)} already imported")
+    if rep.duplicates:
+        print(f"skipped {len(rep.duplicates)} duplicate moment(s) from overlapping hours: "
+              + ", ".join(f"{c.hour}/{c.video.name}" for c in rep.duplicates))
+    if rep.check_by_eye:
+        print(f"skipped {len(rep.check_by_eye)} flagged 'check by eye' (use --include-check-by-eye): "
+              + ", ".join(f"{c.hour}/{c.video.name}" for c in rep.check_by_eye))
+    if rep.missing:
+        print(f"warning: {len(rep.missing)} video file(s) listed in a manifest are missing")
+    if not args.preview and rows:
+        nxt = ("python -m network.cli run-stage publish --channel " + channel.id) if args.approve else               "python -m network.cli approve <job id>  (then run-stage publish)"
+        print(f"next: {nxt}")
+    return 0
+
+
+def cmd_clips_stream(args) -> int:
+    """LOCAL TEST: clip a whole past stream hour by hour into caption-box Shorts."""
+    from network.clips import batch, overlay
+    from network.clips import youtube_vod as yv
+    _setup_logging()
+    settings = load_settings()
+    try:
+        cfg = batch.BatchConfig(
+            url=args.url, streamer_name=args.name, credit=args.credit or "",
+            facecam=overlay.parse_facecam(args.facecam) if args.facecam else None,
+            window=int(args.window * 60), overlap=int(args.overlap * 60),
+            per_window=args.per_hour, max_per_window=max(args.per_hour, args.max_per_hour),
+            start=yv.parse_time(args.start) if args.start else 0.0,
+            end=yv.parse_time(args.end) if args.end else None)
+        results = batch.run(cfg, settings.data_dir, use_claude=not args.no_claude,
+                            progress=lambda s: print(s, flush=True))
+    except (overlay.OverlayError, yv.YouTubeVodError, ValueError) as e:
+        print(e, file=sys.stderr)
+        return 1
+    total = sum(len(r.videos) for r in results)
+    short = [r.index for r in results if len(r.videos) < args.per_hour]
+    print(f"\n{total} videos in {len(results)} hour(s)"
+          + (f"; fewer than {args.per_hour} in hour(s) {short}" if short else ""))
+    return 0
+
+
+def cmd_clips_progress(args) -> int:
+    from network.clips import progress
+    from network.clips import youtube_vod as yv
+    settings = load_settings()
+    vid = yv.video_id(args.url)
+    if args.once:
+        print("\n".join(progress.snapshot(settings.data_dir, vid, args.chat_file, args.per_hour)))
+        return 0
+    progress.watch(settings.data_dir, vid, args.chat_file, args.per_hour)
+    return 0
+
+
 def cmd_clips_score(args) -> int:
     from network.clips.detector import SpikeDetector
     from network.clips.simulate import load_chat, replay
@@ -645,6 +883,91 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--video", required=True, type=Path)
     p.add_argument("--chat", required=True, type=Path, help="JSON lines: {\"t\": sec, \"text\": ..., \"emotes\": n}")
     p.set_defaults(func=cmd_clips_simulate)
+    p = csub.add_parser("youtube", help="clip a past YouTube live stream from its chat replay")
+    p.add_argument("--channel")
+    p.add_argument("--streamer", required=True, help="a permitted streamer login from the channel YAML")
+    p.add_argument("--url", required=True, help="the YouTube live stream (VOD) URL")
+    p.add_argument("--score-only", action="store_true",
+                   help="only download the chat and list the spikes; do not download the video or cut clips")
+    p.set_defaults(func=cmd_clips_youtube)
+    p = csub.add_parser("find", help="LOCAL TEST: find high moments in a past YouTube stream's chat "
+                                     "and cut the raw clips (no config, nothing uploaded)")
+    p.add_argument("--url", required=True, help="the YouTube live stream (VOD) URL")
+    p.add_argument("--start", required=True, help="window start in the stream, e.g. 13:21:00")
+    p.add_argument("--end", required=True, help="window end, e.g. 14:21:00")
+    p.add_argument("--max-clips", type=int, default=5, help="cut at most this many (best first)")
+    p.add_argument("--min-score", type=float, help="override the 0-100 score needed (default 40)")
+    p.add_argument("--score-only", action="store_true", help="list the moments, do not download video")
+    p.add_argument("--mode", choices=["auto", "speed", "reaction"], default="auto",
+                   help="speed: chat suddenly faster (Twitch-style); reaction: much more of chat reacting "
+                        "(for huge streams whose chat speed is capped); auto picks per stream")
+    p.set_defaults(func=cmd_clips_find)
+    p = csub.add_parser("edit", help="make our vertical Short from a raw clip: crop, remove the "
+                                     "streamer's audio, add our narration and captions")
+    p.add_argument("--clip", required=True, type=Path)
+    p.add_argument("--script", type=Path, help="narration text file, one caption line per line")
+    p.add_argument("--text", help='narration inline; "|" starts a new line')
+    p.add_argument("--voice-file", type=Path, help="use this recording instead of the AI voice")
+    p.add_argument("--fit", choices=["crop", "pad"], default="crop",
+                   help="crop: fill the screen (default); pad: full frame over a blurred copy")
+    p.add_argument("--hook", help="title shown at the top for the first seconds")
+    p.add_argument("--credit", help='footage credit at the bottom, e.g. "Footage: youtube.com/@name"')
+    p.add_argument("--start", type=float, help="seconds into the clip to start from "
+                                               "(default: as late as possible, so the clip's end is kept)")
+    p.add_argument("--out", type=Path, help="output file (default: <clip>_edited.mp4)")
+    p.set_defaults(func=cmd_clips_edit)
+    p = csub.add_parser("caption", help="caption-box Short: white box with our text on top of the "
+                                        "clip (original audio kept)")
+    p.add_argument("--clip", required=True, type=Path)
+    p.add_argument("--text", required=True, help='caption text, emoji allowed; "|" forces a new line')
+    p.add_argument("--fit", choices=["zoom", "full"], default="zoom",
+                   help="zoom: middle 4:3 of the frame, bigger (default); full: the whole frame")
+    p.add_argument("--credit", help='footage credit at the bottom, e.g. "Footage: youtube.com/@name"')
+    p.add_argument("--facecam", help="x:y:w:h of the streamer's camera in the original video "
+                                     "(pixels); it is cut out and shown above the gameplay. "
+                                     "IShowSpeed's GTA streams (1920x1080): 12:462:376:238")
+    p.add_argument("--mute", action="store_true", help="remove the original audio")
+    p.add_argument("--start", type=float, help="seconds into the clip to start from")
+    p.add_argument("--duration", type=float, help="length in seconds (default: rest of the clip)")
+    p.add_argument("--out", type=Path, help="output file (default: <clip>_caption.mp4)")
+    p.set_defaults(func=cmd_clips_caption)
+    p = csub.add_parser("stream", help="LOCAL TEST: clip a whole past YouTube stream hour by hour "
+                                       "into caption-box Shorts (resumable)")
+    p.add_argument("--url", required=True)
+    p.add_argument("--name", required=True, help='how captions refer to the streamer, e.g. "Speed"')
+    p.add_argument("--credit", help='footage credit, e.g. "Footage: youtube.com/@IShowSpeed"')
+    p.add_argument("--facecam", help="x:y:w:h of the webcam in the original video (see clips caption)")
+    p.add_argument("--per-hour", type=int, default=5, help="minimum videos per window (default 5)")
+    p.add_argument("--max-per-hour", type=int, default=8, help="extra strong moments allowed (default 8)")
+    p.add_argument("--window", type=float, default=60, help="window length in minutes (default 60)")
+    p.add_argument("--overlap", type=float, default=5,
+                   help="minutes each window reaches back into the previous one (default 5)")
+    p.add_argument("--start", help="only from this stream time, e.g. 3:00:00")
+    p.add_argument("--end", help="only up to this stream time")
+    p.add_argument("--no-claude", action="store_true", help="simple captions from the chat reaction")
+    p.set_defaults(func=cmd_clips_stream)
+    p = csub.add_parser("import", help="queue finished `clips stream` Shorts as upload jobs for a "
+                                       "clip channel (best score first)")
+    p.add_argument("--channel")
+    p.add_argument("--streamer", required=True, help="a permitted streamer login from the channel YAML")
+    p.add_argument("--folder", required=True, type=Path, help="data/stream_clips/<video id>")
+    p.add_argument("--min-score", type=float, default=90, help="only clips scoring at least this (default 90)")
+    p.add_argument("--limit", type=int, help="import at most this many")
+    p.add_argument("--hashtags", nargs="*", default=[], help="extra hashtags/tags, e.g. gta6 gtavi")
+    p.add_argument("--approve", action="store_true", help="approve them now (skip the final approval step)")
+    p.add_argument("--preview", action="store_true", help="only list what would be imported")
+    p.add_argument("--shuffle", action="store_true", help="random order instead of best first")
+    p.add_argument("--varied", action="store_true",
+                   help="random-ish order where back-to-back clips differ in theme, stream time and title")
+    p.add_argument("--include-check-by-eye", action="store_true",
+                   help="also import moments flagged for checking by eye")
+    p.set_defaults(func=cmd_clips_import)
+    p = csub.add_parser("progress", help="live progress bars for a running `clips stream`")
+    p.add_argument("--url", required=True)
+    p.add_argument("--chat-file", type=Path, help="chat replay file still being downloaded (optional)")
+    p.add_argument("--per-hour", type=int, default=5)
+    p.add_argument("--once", action="store_true", help="print once and exit")
+    p.set_defaults(func=cmd_clips_progress)
     p = csub.add_parser("score", help="replay a chat log and show every spike with its score (no video)")
     p.add_argument("--channel")
     p.add_argument("--chat", required=True, type=Path, help="JSON lines: {\"t\": sec, \"text\": ..., \"user\": ...}")

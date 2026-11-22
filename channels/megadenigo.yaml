@@ -1,0 +1,36 @@
+# Clips channel: https://www.youtube.com/@megadenigo
+# Highlights from IShowSpeed streams, posted with his permission (see the evidence file).
+id: megadenigo
+name: "megadenigo"
+language: en
+format: clip
+timezone: "Asia/Kolkata"
+daily_budget_usd: 1
+
+streamers:
+  - platform: youtube
+    login: ishowspeed
+    display_name: IShowSpeed
+    credit: "youtube.com/@IShowSpeed"
+    permission:
+      evidence: assets/permissions/ishowspeed.md
+      granted_on: 2026-11-21
+      conditions: "Credit in the description; link to the original stream."
+
+models:
+  metadata: claude-haiku-5-5
+
+gates:
+  final_auto_approve: false
+
+# 10 clips a day, about every 2.5 hours (IST -> US Eastern):
+#   01:30 = 3:00 PM   04:00 = 5:30 PM   06:30 = 8:00 PM   09:00 = 10:30 PM   11:30 = 1:00 AM
+#   14:00 = 3:30 AM   16:30 = 6:00 AM   19:00 = 8:30 AM   21:30 = 11:00 AM   23:30 = 1:00 PM
+# Each clip is uploaded private with a scheduled time; YouTube makes it public then.
+publish_times_local: ["01:30", "04:00", "06:30", "09:00", "11:30", "14:00", "16:30", "19:00", "21:30", "23:30"]
+
+publish:
+  privacy: private
+  category_id: 20          # Gaming
+  made_for_kids: false
+  use_publish_times: true

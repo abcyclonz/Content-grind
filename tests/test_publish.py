@@ -158,3 +158,26 @@ def test_published_topic_recorded_from_idea(conn, live, channel):
     _ready_job(conn, live, channel, idea_id=idea)
     publish.run(conn, channel, live, client=FakeYT(), now=NOW)
     assert conn.execute("SELECT title FROM published_topics").fetchone()[0] == "Pre-load date confirmed"
+
+
+def test_clip_channel_with_publish_times_is_scheduled(conn, live, clip_channel):
+    clip_channel = clip_channel.model_copy(update={"publish_times_local": ["09:00", "21:30"]})
+    a = _ready_job(conn, live, clip_channel)
+    b = _ready_job(conn, live, clip_channel)
+    c = _ready_job(conn, live, clip_channel)
+    yt = FakeYT()
+    report = publish.run(conn, clip_channel, live, client=yt, now=NOW)   # 11:30 IST
+    times = [at for _, _, at in report.uploaded]
+    assert times == ["2026-11-17T16:00:00+00:00",   # 21:30 IST today
+                     "2026-11-18T03:30:00+00:00",   # 09:00 IST tomorrow
+                     "2026-11-18T16:00:00+00:00"]
+    for _, body in yt.uploads:
+        assert body["status"]["privacyStatus"] == "private" and "publishAt" in body["status"]
+    assert {db.get_job(conn, j)["state"] for j in (a, b, c)} == {"scheduled"}
+
+
+def test_dry_run_plans_distinct_slots(conn, settings, clip_channel):
+    clip_channel = clip_channel.model_copy(update={"publish_times_local": ["09:00", "21:30"]})
+    jobs = [_ready_job(conn, settings, clip_channel) for _ in range(3)]
+    report = publish.run(conn, clip_channel, settings, client=FakeYT(), now=NOW)
+    assert len(set(report.would_schedule[j] for j in jobs)) == 3

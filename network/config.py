@@ -236,7 +236,7 @@ class Permission(_Strict):
 
 
 class Streamer(_Strict):
-    platform: Literal["twitch"]
+    platform: Literal["twitch", "youtube"]  # youtube is used for past streams (clips youtube) only
     login: str = Field(pattern=r"^[a-z0-9_]{3,25}$")  # Twitch logins are lower case
     display_name: str | None = None
     credit: str | None = None  # text burned into the clip; default "twitch.tv/<login>"
@@ -245,7 +245,9 @@ class Streamer(_Strict):
 
     @property
     def credit_text(self) -> str:
-        return self.credit or f"twitch.tv/{self.login}"
+        if self.credit:
+            return self.credit
+        return f"youtube.com/@{self.login}" if self.platform == "youtube" else f"twitch.tv/{self.login}"
 
     @property
     def name(self) -> str:
@@ -307,6 +309,20 @@ class ClipChannelConfig(_Strict):
     models: ClipModels
     gates: ClipGates
     publish: Publish
+    # Optional: daily publish slots (local HH:MM). Empty = clips go up straight away at
+    # `publish.privacy`. Set = each clip is uploaded private with publishAt at the next
+    # free slot, so YouTube makes it public at that time (one clip per slot).
+    publish_times_local: list[str] = Field(default_factory=list)
+
+    @field_validator("publish_times_local")
+    @classmethod
+    def _times(cls, v: list[str]) -> list[str]:
+        bad = [t for t in v if not _HHMM.match(t)]
+        if bad:
+            raise ValueError(f"times must be HH:MM (24h), got {bad}")
+        if len(set(v)) != len(v):
+            raise ValueError("duplicate publish times")
+        return v
 
     @field_validator("timezone")
     @classmethod
